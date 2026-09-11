@@ -1,0 +1,375 @@
+# Image pins live HERE, as interpolation defaults, so `git pull` (or
+# re-downloading this file) delivers the exact version combination this
+# repository has tested — no .env editing required. Setting the matching
+# variable in .env overrides the default for anyone who wants to pin
+# differently; .env itself carries only secrets and deliberate overrides.
+# CI (Trivy scans, check-pin-freshness, the ephemeral test .env) reads
+# the pins from these lines — this block is the single source of truth.
+x-images:
+  traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:${TRAEFIK_IMAGE_VERSION:-3.7@sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259}}
+  beszel: &beszel-image ${BESZEL_IMAGE_TAG:-henrygd/beszel:${BESZEL_IMAGE_VERSION:-0.19.0@sha256:fefb27166f5e1611ebf67f8697ea928a23f44efdb00af922e2ac3b5faa2efd5c}}
+  # The -alpine variant, and it is not interchangeable with the default. See
+  # the agent service below.
+  agent: &agent-image ${BESZEL_AGENT_IMAGE_TAG:-henrygd/beszel-agent:${BESZEL_AGENT_IMAGE_VERSION:-0.19.0-alpine@sha256:1447d89f55e9afa721fe9328c8e776c67e1f43dc8e40bc99da44cfc7f3435db8}}
+  dockerproxy: &dockerproxy-image ${BESZEL_DOCKERPROXY_IMAGE_TAG:-ghcr.io/tecnativa/docker-socket-proxy:${BESZEL_DOCKERPROXY_IMAGE_VERSION:-v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459}}
+  backups: &backups-image ${BESZEL_BACKUPS_IMAGE_TAG:-alpine:${BESZEL_BACKUPS_IMAGE_VERSION:-3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}}
+
+networks:
+  beszel-network:
+    external: true
+  traefik-network:
+    external: true
+
+volumes:
+  beszel-data:
+  beszel-agent-data:
+  beszel-socket:
+  beszel-data-backups:
+  traefik-certificates:
+
+services:
+  # The hub: the dashboard, the alert rules, and the history. PocketBase
+  # underneath, which means SQLite.
+  beszel:
+    image: *beszel-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # A kill during a checkpoint leaves a write-ahead log to replay at best and
+    # a torn page at worst.
+    stop_grace_period: ${BESZEL_STOP_GRACE_PERIOD:-60s}
+    # Resource limits as .env-overridable defaults; the override survives every
+    # git pull. History accumulates in SQLite rather than in memory, so this
+    # stays flat as systems are added.
+    deploy:
+      resources:
+        limits:
+          memory: ${BESZEL_MEMORY_LIMIT:-512m}
+          cpus: "${BESZEL_CPU_LIMIT:-1.0}"
+        reservations:
+          memory: ${BESZEL_MEMORY_RESERVATION:-64m}
+          cpus: "${BESZEL_CPU_RESERVATION:-0.1}"
+    volumes:
+      # Systems, alert rules, users, and every metric it has recorded.
+      - beszel-data:/beszel_data
+      # The channel to the agent. A unix socket in a shared volume rather than
+      # TCP, and that is forced: the agent runs with host networking and the
+      # hub does not, so neither can see the other's loopback and there is no
+      # Docker DNS name that resolves for both.
+      - beszel-socket:/beszel_socket
+    environment:
+      TZ: ${BESZEL_TZ:-Etc/UTC}
+      # Beszel builds alert links AND the agent installation snippets it shows
+      # in its own interface from this. Wrong here and the "copy this compose"
+      # button hands you a broken HUB_URL, which is a confusing thing to debug
+      # because everything else works.
+      APP_URL: https://${BESZEL_HOSTNAME:?set in .env - see .env.example}
+    networks:
+      - beszel-network
+      - traefik-network
+    healthcheck:
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    labels:
+      # Enable Traefik for this container
+      - "traefik.enable=true"
+      # Match incoming requests on a specific hostname
+      - "traefik.http.routers.beszel.rule=Host(`${BESZEL_HOSTNAME:?set in .env - see .env.example}`)"
+      # Assign the router to a named Traefik service
+      - "traefik.http.routers.beszel.service=beszel"
+      # Use the 'websecure' (HTTPS) entry point
+      - "traefik.http.routers.beszel.entrypoints=websecure"
+      # Define the internal container port for routing
+      - "traefik.http.services.beszel.loadbalancer.server.port=8090"
+      # Enable TLS on this router
+      - "traefik.http.routers.beszel.tls=true"
+      # Use Let's Encrypt for certificate management
+      - "traefik.http.routers.beszel.tls.certresolver=letsencrypt"
+      # Pass the original Host header to the container
+      - "traefik.http.services.beszel.loadbalancer.passhostheader=true"
+      - "traefik.http.middlewares.beszel-compress.compress=true"
+      - "traefik.http.routers.beszel.middlewares=beszel-compress"
+      # Specify which Docker network Traefik should use for routing
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      traefik:
+        condition: service_healthy
+
+  # The agent: reads this host and ships what it finds to the hub.
+  #
+  # THE FIRST START WILL CRASH-LOOP, AND THAT IS EXPECTED.
+  # KEY and TOKEN are issued by the hub when you add a system in its interface,
+  # so they cannot exist before the hub has run once. The sequence is in the
+  # README: deploy, open the hub, add a system, paste both values into .env,
+  # `up -d` again. Until then the agent restarts every few seconds and says so.
+  beszel-agent:
+    image: *agent-image
+    # REQUIRED. Without host networking the agent measures the container's
+    # network interface instead of the machine's, and reports a busy server as
+    # idle - a number that is wrong rather than missing, which is worse.
+    network_mode: host
+    # Hardening: no privilege escalation via setuid binaries. This composes
+    # fine with the capabilities the S.M.A.R.T. override adds: they are granted
+    # at container start, not gained by a setuid binary.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Resource limits as .env-overridable defaults; the override survives every
+    # git pull.
+    deploy:
+      resources:
+        limits:
+          memory: ${BESZEL_AGENT_MEMORY_LIMIT:-256m}
+          cpus: "${BESZEL_AGENT_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${BESZEL_AGENT_MEMORY_RESERVATION:-32m}
+          cpus: "${BESZEL_AGENT_CPU_RESERVATION:-0.1}"
+    volumes:
+      - beszel-agent-data:/var/lib/beszel-agent
+      - beszel-socket:/beszel_socket
+    environment:
+      TZ: ${BESZEL_TZ:-Etc/UTC}
+      # A unix socket, not a port. See the hub's volume note above.
+      LISTEN: /beszel_socket/beszel.sock
+      HUB_URL: http://localhost:8090
+      # Both are issued by the hub. Empty until you have added a system there;
+      # see the crash-loop note above.
+      KEY: ${BESZEL_AGENT_KEY:-}
+      TOKEN: ${BESZEL_AGENT_TOKEN:-}
+      # Per-container CPU and memory, read through the proxy below rather than
+      # from a mounted socket. The agent honours DOCKER_HOST; the proxy is
+      # published on loopback only, because a host-networked container has no
+      # Docker DNS to reach a service name with.
+      DOCKER_HOST: tcp://127.0.0.1:${BESZEL_DOCKERPROXY_PORT:-2375}
+      # Which filesystem the root disk chart follows. This must be the name as
+      # it appears in /proc/diskstats - `dm-0` on LVM, not `/dev/mapper/...` -
+      # or you get disk usage with permanently empty I/O charts.
+      FILESYSTEM: ${BESZEL_FILESYSTEM:-}
+    healthcheck:
+      test: ["CMD", "/agent", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    depends_on:
+      dockerproxy:
+        condition: service_started
+
+  # The ONLY container here that touches the Docker socket.
+  #
+  # The agent wants per-container CPU and memory. That needs container listing
+  # and inspection, and nothing else: it never starts, stops or execs anything.
+  # `:ro` on a socket mount would not express that - the Docker API is
+  # root-equivalent whichever way the file is mounted - so the socket stays
+  # here and POST is denied.
+  #
+  # Published on 127.0.0.1 rather than reached by name, because the agent runs
+  # with host networking and host networking has no Docker DNS. Loopback means
+  # nothing outside this machine can reach it.
+  dockerproxy:
+    image: *dockerproxy-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: ${BESZEL_DOCKERPROXY_MEMORY_LIMIT:-64m}
+          cpus: "${BESZEL_DOCKERPROXY_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${BESZEL_DOCKERPROXY_MEMORY_RESERVATION:-16m}
+          cpus: "${BESZEL_DOCKERPROXY_CPU_RESERVATION:-0.1}"
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      PING: 1
+      VERSION: 1
+      EVENTS: 1
+      # Pinned to their defaults rather than left unstated, so the posture is
+      # auditable by reading this file instead of the image's documentation.
+      INFO: 0
+      IMAGES: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      SERVICES: 0
+      TASKS: 0
+      EXEC: 0
+      SECRETS: 0
+      SYSTEM: 0
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SESSION: 0
+      SWARM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:${BESZEL_DOCKERPROXY_PORT:-2375}:2375"
+    networks:
+      - beszel-network
+    restart: unless-stopped
+
+  traefik:
+    image: *traefik-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Drop every Linux capability; add back only what this image's
+    # entrypoint needs (bind :80/:443).
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    # Resource limits as .env-overridable defaults (e.g. TRAEFIK_MEMORY_LIMIT=2g);
+    # the override survives every git pull.
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_MEMORY_LIMIT:-256m}
+          cpus: "${TRAEFIK_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${TRAEFIK_MEMORY_RESERVATION:-64m}
+          cpus: "${TRAEFIK_CPU_RESERVATION:-0.1}"
+    command:
+      # Set the log level (DEBUG, INFO, WARN, ERROR)
+      - "--log.level=${TRAEFIK_LOG_LEVEL:-WARN}"
+      # Enable the built-in API and web-based dashboard
+      - "--api.dashboard=true"
+      # Enable the /ping endpoint so we can health-check Traefik
+      - "--ping=true"
+      # Assign the /ping endpoint to a dedicated entry point on port 8082
+      - "--ping.entrypoint=ping"
+      - "--entrypoints.ping.address=:8082"
+      # Define the primary HTTP entry point on port 80
+      - "--entrypoints.web.address=:80"
+      # Define the secure (HTTPS) entry point on port 443
+      - "--entrypoints.websecure.address=:443"
+      # HTTP -> HTTPS redirect at entrypoint level
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # The dashboard holds long-lived connections for live charts.
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=${BESZEL_READ_TIMEOUT:-0s}"
+      - "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=${BESZEL_WRITE_TIMEOUT:-0s}"
+      - "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=${BESZEL_IDLE_TIMEOUT:-600s}"
+      # Enable the Docker provider to detect containers and their labels
+      - "--providers.docker=true"
+      # Point Traefik to the Docker socket
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      # Prevent automatic exposure of all containers; only expose containers
+      # with "traefik.enable=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Use ACME (Let's Encrypt) to generate/renew certificates via TLS challenge
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # The email address used by Let's Encrypt for renewal notices
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:?set in .env - see .env.example}"
+      # The file where ACME certificates are stored inside the container
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      # Enable Prometheus metrics
+      - "--metrics.prometheus=true"
+      # Configure Prometheus histogram buckets
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      # Check for newer Traefik versions and optionally log that info
+      - "--global.checknewversion=true"
+      # Disable sending anonymous usage data to the Traefik maintainers
+      - "--global.sendanonymoususage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping","--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      # Enable Traefik for this container
+      - "traefik.enable=true"
+      # A router to expose the Traefik dashboard
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME:?set in .env - see .env.example}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      # Basic Authentication for the Traefik dashboard
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH:?set in .env - see .env.example for htpasswd generation}"
+      # Specify the internal server port to the dashboard service
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      # Pass the original Host header to the backend
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+    restart: unless-stopped
+
+  backups:
+    # A plain alpine: the hub's data directory is what is worth keeping, so the
+    # loop needs tar and nothing else.
+    image: *backups-image
+    # Hardening: no privilege escalation via setuid binaries
+    security_opt:
+      - no-new-privileges:true
+    # Drop every Linux capability; add back only what this container needs to
+    # write archives it owns.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    # Resource limits as .env-overridable defaults; the override survives every
+    # git pull.
+    deploy:
+      resources:
+        limits:
+          memory: ${BESZEL_BACKUPS_MEMORY_LIMIT:-256m}
+          cpus: "${BESZEL_BACKUPS_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${BESZEL_BACKUPS_MEMORY_RESERVATION:-16m}
+          cpus: "${BESZEL_BACKUPS_CPU_RESERVATION:-0.1}"
+    command: >-
+      sh -c 'sleep "$$BACKUP_INIT_SLEEP";
+      while true; do
+        STAMP="$$(date +%Y-%m-%d_%H-%M)";
+        DATA_FILE="$$DATA_BACKUPS_PATH/$$DATA_BACKUP_NAME-$$STAMP.tar.gz";
+        echo "[$$(date -Iseconds)] Starting data backup to $$DATA_FILE";
+        tar -zcpf "$$DATA_FILE.partial" $$DATA_PATH; RC=$$?;
+        if { [ "$$RC" -eq 0 ] || [ "$$RC" -eq 1 ]; } && tar -tzf "$$DATA_FILE.partial" > /dev/null 2>&1; then
+          mv "$$DATA_FILE.partial" "$$DATA_FILE";
+          echo "[$$(date -Iseconds)] Data backup OK: $$DATA_FILE ($$(stat -c %s "$$DATA_FILE") bytes)$$([ "$$RC" -eq 1 ] && echo " - some files changed while being read")";
+        else
+          echo "[$$(date -Iseconds)] Data backup FAILED - partial file kept as $$DATA_FILE.failed for diagnosis" >&2;
+          mv "$$DATA_FILE.partial" "$$DATA_FILE.failed" 2>/dev/null || true;
+        fi;
+        if [ "$${DATA_BACKUP_PRUNE_DAYS:-0}" -ge 1 ]; then
+          find "$$DATA_BACKUPS_PATH" -type f -name "$$DATA_BACKUP_NAME-*" -mtime "+$$DATA_BACKUP_PRUNE_DAYS" -delete;
+        fi;
+        sleep "$$BACKUP_INTERVAL";
+      done'
+    volumes:
+      - beszel-data:${DATA_PATH:-/beszel_data}
+      - beszel-data-backups:${DATA_BACKUPS_PATH:-/srv/beszel-data/backups}
+    environment:
+      BACKUP_INIT_SLEEP: ${BACKUP_INIT_SLEEP:-30m}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-24h}
+      DATA_BACKUP_PRUNE_DAYS: ${DATA_BACKUP_PRUNE_DAYS:-7}
+      DATA_BACKUPS_PATH: ${DATA_BACKUPS_PATH:-/srv/beszel-data/backups}
+      DATA_PATH: ${DATA_PATH:-/beszel_data}
+      DATA_BACKUP_NAME: ${DATA_BACKUP_NAME:-beszel-data-backup}
+    networks:
+      - beszel-network
+    restart: unless-stopped

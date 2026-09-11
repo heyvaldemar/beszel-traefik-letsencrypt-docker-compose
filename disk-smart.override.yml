@@ -1,0 +1,78 @@
+# S.M.A.R.T. disk health — opt in, because it needs devices that exist on your
+# host and on nobody else's.
+#
+# The base stack deliberately does not name a single device node. A compose
+# file that does will not start on a machine without that exact node: not on a
+# VPS, not on the CI runner that proves this template works, not on the laptop
+# of anybody who clones it to try. So the host-specific half lives here, and
+# you fill it in from what your machine actually has.
+#
+#   docker compose \
+#     -f beszel-traefik-letsencrypt-docker-compose.yml \
+#     -f disk-smart.override.yml \
+#     -p beszel up -d
+#
+# ── WHY THE AGENT MUST BE THE -alpine IMAGE ───────────────────────────────────
+#
+# The base stack already pins it, and this is the reason. The default agent
+# image is built FROM scratch: no shell, no smartctl, and therefore no S.M.A.R.T.
+# at all. It runs perfectly happily and silently monitors nothing about disk
+# health - the failure mode where everything is green and the question is not
+# being asked. Upstream says as much: "Switch to the :alpine image."
+#   https://beszel.dev/guide/smart-data
+#
+# ── NOT `privileged: true` ────────────────────────────────────────────────────
+#
+# Privileged grants every capability on the host. S.M.A.R.T. needs exactly two,
+# and that is the whole difference between "it works" and "it works without
+# handing away the machine":
+#
+#   SYS_RAWIO   SATA/ATA S.M.A.R.T. through SG_IO
+#   SYS_ADMIN   NVMe S.M.A.R.T. admin passthrough
+#
+# Drop the one you do not need. A host with only NVMe does not need SYS_RAWIO.
+#
+# ── PASS THE CONTROLLER, NOT THE BLOCK DEVICE OR A PARTITION ──────────────────
+#
+#   /dev/nvme0     yes   the controller, a character device
+#   /dev/nvme0n1   no    the block device
+#   /dev/sda       yes
+#   /dev/sda1      no    a partition
+#
+# Find yours before you edit this, rather than guessing:
+#
+#   sudo smartctl --scan
+#   lsblk -o NAME,TYPE,SERIAL
+#
+# ── USB ENCLOSURES: USE /dev/disk/by-id ───────────────────────────────────────
+#
+# USB enumeration reshuffles sd? letters between boots, so a disk pinned as
+# /dev/sda today is a different disk tomorrow. Source paths under
+# /dev/disk/by-id are stable; Docker resolves the symlink at container start,
+# so each serial always lands on the same node inside the container.
+#
+# Not every enclosure passes S.M.A.R.T. through at all - a good many USB-SATA
+# bridges refuse SAT passthrough entirely, and then smartctl returns nothing
+# whatever you mount. Check with `sudo smartctl -a /dev/sdX` on the host first.
+services:
+  beszel-agent:
+    cap_add:
+      - SYS_RAWIO
+      - SYS_ADMIN
+    devices:
+      # REPLACE THESE. They are examples, and a device node that does not exist
+      # stops the stack from starting - which is the honest failure, and why
+      # this file is separate.
+      - /dev/nvme0:/dev/nvme0
+      # A SATA disk in a USB enclosure, addressed by its stable id:
+      # - /dev/disk/by-id/ata-VENDOR_MODEL_SERIAL:/dev/sda
+    environment:
+      # Keep a device out of the S.M.A.R.T. panel. A software RAID array is the
+      # usual reason: Beszel maps the array's sync_action straight to a status,
+      # so a SCHEDULED PARITY CHECK - the array proving itself correct - shows
+      # as WARNING, which reads exactly like a failing disk.
+      #
+      # Know what you give up before you use this: the same mapping returns
+      # FAILED for a genuinely degraded array. Exclude one only when something
+      # else is watching it, such as mdmonitor.
+      EXCLUDE_SMART: "${BESZEL_EXCLUDE_SMART:-}"

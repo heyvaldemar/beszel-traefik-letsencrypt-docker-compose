@@ -1,0 +1,43 @@
+# Charting a second disk — opt in, for the same reason as S.M.A.R.T.: the paths
+# are yours and exist nowhere else.
+#
+#   docker compose \
+#     -f beszel-traefik-letsencrypt-docker-compose.yml \
+#     -f extra-filesystems.override.yml \
+#     -p beszel up -d
+#
+# ── CREATE THE MARKER DIRECTORIES FIRST. THIS IS THE WHOLE TRAP ───────────────
+#
+# Beszel charts a filesystem by watching a marker directory that lives ON it.
+# If that directory does not exist when the container starts, Docker CREATES
+# IT - as root, on whatever filesystem the path resolves to, which for an
+# unmounted disk is the root filesystem. You then get a chart that looks
+# entirely plausible and is measuring / a second time.
+#
+# So, on the host, before the first start:
+#
+#   sudo mkdir -p /mnt/media/.beszel /mnt/data/.beszel
+#
+# Put the marker on the disk itself and an unmounted disk gives you an empty
+# graph, which is a question. A silently duplicated root filesystem is not.
+#
+# ── THE DOUBLE UNDERSCORE ─────────────────────────────────────────────────────
+#
+#   /mnt/media/.beszel:/extra-filesystems/sdb1__Media:ro
+#                                         ^^^^  ^^^^^
+#                                         |     the label shown in the interface
+#                                         the name in /proc/diskstats, used for
+#                                         I/O statistics
+#
+# The left half must be an entry in /proc/diskstats or the usage chart appears
+# and the I/O chart stays permanently flat. On LVM that is `dm-0`, not the
+# /dev/mapper path; on a software array it is `md0`. Check with:
+#
+#   lsblk
+#   cat /proc/diskstats
+services:
+  beszel-agent:
+    volumes:
+      # REPLACE THESE, and create them on the host first.
+      - /mnt/data/.beszel:/extra-filesystems/sdb1__Data:ro
+      # - /mnt/media/.beszel:/extra-filesystems/sdc1__Media:ro
