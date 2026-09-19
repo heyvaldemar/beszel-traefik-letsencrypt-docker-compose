@@ -6,13 +6,13 @@
 # CI (Trivy scans, check-pin-freshness, the ephemeral test .env) reads
 # the pins from these lines — this block is the single source of truth.
 x-images:
-  traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:${TRAEFIK_IMAGE_VERSION:-3.7@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c}}
+  traefik: &traefik-image ${TRAEFIK_IMAGE_TAG:-traefik:${TRAEFIK_IMAGE_VERSION:-3.7@sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259}}
   beszel: &beszel-image ${BESZEL_IMAGE_TAG:-henrygd/beszel:${BESZEL_IMAGE_VERSION:-0.19.0@sha256:fefb27166f5e1611ebf67f8697ea928a23f44efdb00af922e2ac3b5faa2efd5c}}
   # The -alpine variant, and it is not interchangeable with the default. See
   # the agent service below.
   agent: &agent-image ${BESZEL_AGENT_IMAGE_TAG:-henrygd/beszel-agent:${BESZEL_AGENT_IMAGE_VERSION:-0.19.0-alpine@sha256:1447d89f55e9afa721fe9328c8e776c67e1f43dc8e40bc99da44cfc7f3435db8}}
   dockerproxy: &dockerproxy-image ${BESZEL_DOCKERPROXY_IMAGE_TAG:-ghcr.io/tecnativa/docker-socket-proxy:${BESZEL_DOCKERPROXY_IMAGE_VERSION:-v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459}}
-  backups: &backups-image ${BESZEL_BACKUPS_IMAGE_TAG:-alpine:${BESZEL_BACKUPS_IMAGE_VERSION:-3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}}
+  backups: &backups-image ${BESZEL_BACKUPS_IMAGE_TAG:-alpine:${BESZEL_BACKUPS_IMAGE_VERSION:-3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}}
 
 networks:
   beszel-network:
