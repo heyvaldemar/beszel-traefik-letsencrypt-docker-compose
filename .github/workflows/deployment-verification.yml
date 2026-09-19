@@ -259,10 +259,19 @@ jobs:
           docker compose -f .upgrade-drill-previous.yml -p "$COMPOSE_PROJECT_NAME" up -d
           # Healthy means: every container is running and healthy (or running
           # with no health check), or exited 0 (a one-shot init container).
+          #
+          # EXCEPT THE AGENT, which this template documents as crash-looping
+          # until the hub issues it a key: .env.example ships BESZEL_AGENT_KEY
+          # empty on purpose, and a smoke check below asserts the agent is
+          # failing for that exact reason and no other. The drill had no such
+          # exemption, so it read "beszel-agent:restarting" as "the previous
+          # release did not come up" and failed every time. Every pin refresh
+          # since v1.0.0 was reverted by fleet triage on the strength of it,
+          # and this repository could not be updated at all.
           bad=""
           for _ in $(seq 1 60); do
             bad="$(docker compose -f .upgrade-drill-previous.yml -p "$COMPOSE_PROJECT_NAME" ps -a --format json \
-              | jq -rs '[.[] | select((.State == "running" and (.Health == "" or .Health == "healthy")) or (.State == "exited" and .ExitCode == 0) | not)] | map("\(.Service):\(.State)/\(.Health)") | join(" ")')"
+              | jq -rs '[.[] | select(.Service != "beszel-agent") | select((.State == "running" and (.Health == "" or .Health == "healthy")) or (.State == "exited" and .ExitCode == 0) | not)] | map("\(.Service):\(.State)/\(.Health)") | join(" ")')"
             [ -z "$bad" ] && break
             sleep 10
           done
