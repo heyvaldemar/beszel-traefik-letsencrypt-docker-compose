@@ -1,62 +1,64 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# beszel-restore-data.sh [backup-file-name]
+#
+# Replaces Beszel's application data with one of the archives the backups
+# service wrote.
+#
+#   ./beszel-restore-data.sh               list and ask
+#   ./beszel-restore-data.sh <file-name>   restore that one
+#
+# EVERY PATH, NAME AND CREDENTIAL COMES FROM THE RUNNING BACKUPS CONTAINER.
+# The previous version read DATA_PATH and DATA_BACKUPS_PATH from the shell
+# that ran it rather than from .env or the stack, so a path set in .env was not
+# the one it listed or cleared; it cleared with rm -rf dir/*, which leaves every
+# dotfile of the newer state in place; and it could only be run by hand.
+# The backup loop reads its own environment, so this reads the same one, and
+# the two cannot disagree.
+#
+# CI runs this exact file: a file written before a backup and deleted after
+# it must be back once that backup is restored.
+#
+# Set COMPOSE_PROJECT_NAME if the stack was started with a -p other than beszel.
+set -Eeuo pipefail
 
-# Restore Beszel's data directory from one of the archives the `backups`
-# container has taken.
-#
-# That directory is everything the hub knows: the systems it monitors, every
-# alert rule and threshold you set, the users, and the metric history. The
-# history rides along and nobody restores a CPU graph from March; the alert
-# rules are the part that is genuinely irreplaceable.
-#
-#     chmod +x beszel-restore-config.sh
-#     ./beszel-restore-config.sh
-#
-# The agent's own directory is not in the archive and is not touched here. It
-# is local state and is rebuilt on start.
-#
-# The agent keeps running throughout. It buffers nothing, so the gap in the
-# charts is exactly as long as the hub is down.
-set -euo pipefail
-cd "$(dirname "$0")"
-
-COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-beszel-traefik-letsencrypt-docker-compose.yml}"
 PROJECT="${COMPOSE_PROJECT_NAME:-beszel}"
-BACKUP_PATH="${DATA_BACKUPS_PATH:-/srv/beszel-data/backups}"
-RESTORE_PATH="${DATA_PATH:-/beszel_data}"
+APP_SERVICE="beszel"
 
-dc() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
+cid() {  # the container of one compose service in this project
+  docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$1" | head -n 1
+}
+APP="$(cid "$APP_SERVICE")"; BKP="$(cid backups)"
+[ -n "$BKP" ] || { echo "error: no backups container in compose project '$PROJECT' (set COMPOSE_PROJECT_NAME)" >&2; exit 1; }
+[ -n "$APP" ] || { echo "error: no $APP_SERVICE container in compose project '$PROJECT'" >&2; exit 1; }
+[ "$(docker inspect -f '{{.State.Running}}' "$BKP")" = true ] || { echo "error: the backups container is not running" >&2; exit 1; }
 
-APP_CONTAINER="$(dc ps -aq beszel | head -n 1)"
-BACKUPS_CONTAINER="$(dc ps -aq backups | head -n 1)"
-[ -n "$APP_CONTAINER" ] || { echo "the beszel container was not found — is the stack up?" >&2; exit 1; }
-[ -n "$BACKUPS_CONTAINER" ] || { echo "the backups container was not found — is the stack up?" >&2; exit 1; }
+env_of() { docker exec "$BKP" printenv "$1"; }
+DIR="$(env_of DATA_BACKUPS_PATH)"; NAME="$(env_of DATA_BACKUP_NAME)"; DATA="$(env_of DATA_PATH)"
+case "$DATA" in ""|/) echo "error: DATA_PATH is '$DATA'; refusing to clear it" >&2; exit 1 ;; esac
 
-echo "--> All available config backups:"
-docker exec "$BACKUPS_CONTAINER" sh -c "ls -1 $BACKUP_PATH" || true
+SELECTED="${1:-}"
+if [ -z "$SELECTED" ]; then
+  echo "Application data backups in $DIR:"
+  docker exec "$BKP" sh -c "ls -1 '$DIR' | grep -E '^$NAME-.*\\.tar\\.gz\$'" || { echo "  none found" >&2; exit 1; }
+  read -r -p "File name to restore: " SELECTED
+fi
+case "$SELECTED" in ""|*/*) echo "error: give a file name from the list, not a path" >&2; exit 1 ;; esac
+docker exec "$BKP" tar -tzf "$DIR/$SELECTED" >/dev/null \
+  || { echo "error: $DIR/$SELECTED is missing or does not open; nothing was changed" >&2; exit 1; }
 
-echo "--> Copy and paste the backup name from the list above and press [ENTER]
---> Example: beszel-data-backup-YYYY-MM-DD_hh-mm.tar.gz"
-echo -n "--> "
-read -r SELECTED
-[ -n "$SELECTED" ] || { echo "nothing selected, nothing restored" >&2; exit 1; }
-
-if ! docker exec "$BACKUPS_CONTAINER" sh -c "tar -tzf '${BACKUP_PATH}/${SELECTED}' > /dev/null"; then
-  echo "that file is not a readable tar archive — nothing has been stopped or deleted" >&2
+echo "Stopping $APP_SERVICE so nothing writes while its data is replaced"
+docker stop "$APP" >/dev/null
+restart() { docker start "$APP" >/dev/null && echo "Started $APP_SERVICE"; }
+trap 'restart' EXIT
+echo "Restoring $SELECTED"
+# The archive holds the data directory relative to / (the loop writes it that
+# way), so it is extracted at /; what was there first is removed so files that
+# did not exist at backup time do not survive the restore.
+if ! docker exec "$BKP" sh -c "set -eu
+    find '$DATA' -mindepth 1 -delete
+    tar -xzpf '$DIR/$SELECTED' -C /"; then
+  echo "error: the restore failed part-way; $DATA may be incomplete. Restore another archive before using Beszel." >&2
   exit 1
 fi
-echo "--> $SELECTED was selected and reads as a valid archive"
-
-echo "--> Stopping Beszel..."
-docker stop "$APP_CONTAINER" > /dev/null
-
-echo "--> Restoring the data directory..."
-# The archive stores paths relative to /, so it extracts there. The directory
-# is emptied first: a restore that merges leaves rows in the old library
-# database that the archive never had.
-docker exec "$BACKUPS_CONTAINER" sh -c "rm -rf '${RESTORE_PATH:?}'/* && tar -zxpf '${BACKUP_PATH}/${SELECTED}' -C /"
-echo "--> Config recovery completed."
-
-echo "--> Starting Beszel..."
-docker start "$APP_CONTAINER" > /dev/null
-echo "--> The hub answers once it has opened the restored database."
-echo "--> Check Systems afterwards: anything the archive predates is gone, and re-adding it issues a new token."
+echo "Restored $SELECTED into $DATA"

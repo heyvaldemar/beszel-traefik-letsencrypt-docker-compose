@@ -131,6 +131,8 @@ chmod +x ./*.sh
 ./beszel-restore-data.sh
 ```
 
+It lists the backups and asks, or takes a file name as its argument; it reads every path from the running backups container, and CI runs it on every push.
+
 One caveat stated rather than hidden: tarring a live SQLite file under write load can produce a torn snapshot. At the write rate of a monitoring hub this is not a real risk, and the read-back would catch an archive that does not open — but if you want it airtight, stop the hub for the few seconds the tar takes.
 
 ## Resource limits
