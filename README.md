@@ -1,6 +1,7 @@
 # Beszel + Traefik + Let's Encrypt on Docker Compose
 
 [![Deployment Verification](https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml/badge.svg?branch=main)](https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/actions/workflows/deployment-verification.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14863/badge)](https://www.bestpractices.dev/projects/14863)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 This repository deploys Beszel — a light server monitor with weeks of history and threshold alerts — behind Traefik with automatic Let's Encrypt TLS, with scheduled backups and a companion restore script.
