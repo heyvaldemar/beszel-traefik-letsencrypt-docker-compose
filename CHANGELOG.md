@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.1.1] - 2026-09-28
+
 ### Security
 
 - **The HTTPS entry point's read timeout is no longer zero.** `BESZEL_READ_TIMEOUT` and
@@ -141,7 +145,8 @@ fleet standard established in
   would catch an archive that does not open. Stop the hub for the few seconds
   the tar takes if you want it airtight.
 
-[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.0.3...v1.1.0
 [1.0.2]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.0.0...v1.0.1
