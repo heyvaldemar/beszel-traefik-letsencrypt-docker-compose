@@ -12,7 +12,7 @@ x-images:
   # the agent service below.
   agent: &agent-image ${BESZEL_AGENT_IMAGE_TAG:-henrygd/beszel-agent:${BESZEL_AGENT_IMAGE_VERSION:-0.21.0-alpine@sha256:b133b004335261dd10d8e2f1fd989eb4ee6f424ec2f8a8050cce800e014da180}}
   dockerproxy: &dockerproxy-image ${BESZEL_DOCKERPROXY_IMAGE_TAG:-ghcr.io/tecnativa/docker-socket-proxy:${BESZEL_DOCKERPROXY_IMAGE_VERSION:-v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459}}
-  backups: &backups-image ${BESZEL_BACKUPS_IMAGE_TAG:-alpine:${BESZEL_BACKUPS_IMAGE_VERSION:-3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}}
+  backups: &backups-image ${BESZEL_BACKUPS_IMAGE_TAG:-alpine:${BESZEL_BACKUPS_IMAGE_VERSION:-3.22@sha256:822614ea121e1d40a33655081af10ef85f0aa2ab9e61f649ceaf0c651822433c}}
 
 networks:
   beszel-network:
