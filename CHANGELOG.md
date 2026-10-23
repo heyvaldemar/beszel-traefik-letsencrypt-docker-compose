@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.1.9] - 2026-10-23
+
 ### Changed
 
 - **`henrygd/beszel:0.21.0` moved to `henrygd/beszel:0.21.1`.** The freshness check reported the lag; the deploy job booted the stack on the new image before this landed.
@@ -205,7 +209,8 @@ fleet standard established in
   would catch an archive that does not open. Stop the hub for the few seconds
   the tar takes if you want it airtight.
 
-[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.9...HEAD
+[1.1.9]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.5...v1.1.6
