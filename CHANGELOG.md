@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_(no unreleased changes yet)_
+### Changed
+
+- **`henrygd/beszel:0.21.1` moved to `henrygd/beszel:0.21.2`.** The freshness check reported the lag; the deploy job booted the stack on the new image before this landed.
+- **`henrygd/beszel-agent:0.21.1-alpine` moved to `henrygd/beszel-agent:0.21.2-alpine`.** The freshness check reported the lag; the deploy job booted the stack on the new image before this landed.
 
 ## [1.1.15] - 2026-11-12
 
