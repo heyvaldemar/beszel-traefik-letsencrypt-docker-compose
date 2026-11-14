@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.1.17] - 2026-11-14
+
 ### Security
 
 - **`traefik:3.7` was rebuilt upstream**; the pin moved from `sha256:c1ea95f3b3ea…` to `sha256:b7b1b31e6440…`. Same version, same tag, a rebuilt base image — the usual shape of a security fix in a base layer.
@@ -259,7 +263,8 @@ fleet standard established in
   would catch an archive that does not open. Stop the hub for the few seconds
   the tar takes if you want it airtight.
 
-[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.16...HEAD
+[Unreleased]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.17...HEAD
+[1.1.17]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.16...v1.1.17
 [1.1.16]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.15...v1.1.16
 [1.1.15]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.14...v1.1.15
 [1.1.14]: https://github.com/heyvaldemar/beszel-traefik-letsencrypt-docker-compose/compare/v1.1.13...v1.1.14
